@@ -1,0 +1,10 @@
+black==25.1.0
+caproto==1.2.0
+epicscorelibs==7.0.7.99.1.2
+Jinja2==3.1.6
+numpy==2.3.2
+p4p==4.2.1
+pvxslibs==1.4.1
+pydantic==2.11.7
+pydantic_core==2.33.2
+PyYAML==6.0.2

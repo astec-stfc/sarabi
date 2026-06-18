@@ -1,0 +1,79 @@
+import threading
+import os
+import sys
+from typing import Dict
+import time
+{% for module in imports %}
+from {{module[1]}} import {{ module[1]}}
+{% endfor %}
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "..",))
+from core.translator import SchemaTranslator
+from core import helper as helper
+from caproto.server import run
+from p4p.server import Server
+from p4p.server.thread import SharedPV
+
+os.environ["EPICS_CA_SERVER_PORT"] = os.getenv("EPICS_CA_SERVER_PORT", "6090")
+os.environ["EPICS_PVA_SERVER_PORT"] = os.getenv("EPICS_PVA_SERVER_PORT", "6091")
+os.environ["EPICS_PVA_SERVER_PORT"] = os.getenv("EPICS_PVAS_BROADCAST_PORT", "6091")
+os.environ["EPICS_CA_ADDR_LIST"] = "localhost"
+
+yaml_dir = r"{{yaml_root}}"
+translator_spec = r"{{translator_file}}"
+translator = SchemaTranslator(translator_spec)
+ca_iocs = {}
+pva_iocs = {}
+
+def run_ca_ioc(iocs: Dict) -> None:
+    run(iocs)
+
+def run_pva_ioc(iocs: Dict[str, SharedPV], stop_event) -> None:
+    with Server(providers=[iocs]) as srv:
+        print(srv.conf())
+        print(iocs)
+        while not stop_event.is_set():
+            time.sleep(0.1)
+
+def _construct_iocs() -> None:
+    _ca_iocs = {}
+    _pva_iocs = {}
+    for device in helper._get_device_info(yaml_dir, translator=translator):
+        for name, pv_map in device.items():
+            ca_pv_map, pva_pv_map = helper.separate_by_protocol(pv_map)
+    {% for module in imports %}
+        {% if device_type + "BaseIOC" == module[1] %}
+            _ca_ioc_cls = {{module[1]}}
+            _ca_iocs.update(helper.construct_ca_iocs(ca_pv_map, name, ioc_cls=_ca_ioc_cls, translator=translator))
+        {% endif %}
+    {% endfor %}
+    {% for module in imports %}
+        {% if device_type + "BasePVAIOC" == module[1] %}
+            _pva_ioc_cls = {{module[1]}}
+            _pva_iocs.update(helper.construct_pva_iocs(pva_pv_map, name, ioc_cls=_pva_ioc_cls, translator=translator))
+        {% endif %}
+    {% endfor %}
+    ioc_manager = helper._create_ioc_manager(_ca_iocs, _pva_iocs)
+    return ioc_manager
+
+if __name__ == "__main__":
+    ioc_manager = _construct_iocs()
+    _stop_event = threading.Event()
+    _pva_thread = None
+    _ca_thread = None
+    if ioc_manager.ca_iocs:
+        _ca_thread = threading.Thread(target=run_ca_ioc, args=(ioc_manager.ca_iocs,), daemon=True)
+        _ca_thread.start()
+    if ioc_manager.pva_iocs:
+        _pva_thread = threading.Thread(target=run_pva_ioc, args=(ioc_manager.pva_iocs, _stop_event), daemon=True)
+        _pva_thread.start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        _stop_event.set()
+        if _ca_thread:
+            _ca_thread.join(timeout=2)
+        if _pva_thread:
+            _pva_thread.join(timeout=2)
+        sys.exit(0)
+

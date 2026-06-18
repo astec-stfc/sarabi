@@ -1,0 +1,10 @@
+{
+    "translations": {
+        "controls_information": "controls_information",
+        "signal_information": "pv_record_map",
+        "description": "description",
+        "identifier": "pv",
+        "dtype": "type",
+        "protocol": "protocol"
+    }
+}

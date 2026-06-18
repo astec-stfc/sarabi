@@ -1,0 +1,10 @@
+{
+    "translations": {
+        "controls_information": "controls",
+        "signal_information": "variables",
+        "description": "description",
+        "identifier": "identifier",
+        "dtype": "dtype",
+        "protocol": "protocol"
+    }
+}

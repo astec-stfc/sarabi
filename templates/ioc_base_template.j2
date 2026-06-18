@@ -1,0 +1,76 @@
+from caproto.server import PVGroup, pvproperty, ioc_arg_parser, run
+from caproto import ChannelType, SkipWrite
+import numpy as np
+
+
+class {{class_name}}(PVGroup):
+{% if pv_map %}
+    {% for name, config in pv_map.items() %}
+        {{ name }}: pvproperty = pvproperty(
+            value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
+            dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
+            {% if config.type is defined and config.type == "state" %}
+            enum_strings=[
+                {% for key, _ in config.states|dictsort(by='value') %}
+                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            ],
+            {% endif %}
+            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
+            doc="{{ config.description if config.description is defined else 'default description.' }}",
+        )
+    {% endfor %}
+    # The following PVs may not exist for all IOCs of this type.
+    {% for name, config in unique_pv_map.items() %}
+        {{ name }}: pvproperty | None = pvproperty(
+            value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
+            dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
+            {% if config.type is defined and config.type == "state" %}
+            enum_strings=[
+                {% for key, _ in config.states|dictsort(by='value') %}
+                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            ],
+            {% endif %}
+            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
+            doc="{{ config.description if config.description is defined else 'default description.' }}",
+        )
+    {% endfor %}
+    {% for name, config in pv_map.items() %}
+        @{{ name }}.scan(period=1.0)
+        async def {{ name }}(self, instance, async_lib):
+            # This is a placeholder for custom logic to update the PV value.
+            # Replace with actual implementation as needed.
+            pass
+        
+        {% if config.type is defined and config.type == "state"%}
+        @{{ name }}.putter
+        async def {{ name }}(self, instance, value):
+            if isinstance(value, str):
+                if value in instance.enum_strings:
+                    return value
+                else:
+                    raise SkipWrite(f"Invalid state string: {value}")
+            elif isinstance(value, int):
+                if 0 <= value < len(instance.enum_strings):
+                    return value
+                else:
+                    raise SkipWrite(f"Invalid state index: {value}")
+            else:
+                raise TypeError("Could not write value to channel.")
+        {% endif %}
+    {% endfor %}
+
+{% else %}
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+{% endif %}
+
+if __name__ == '__main__':
+    ioc_options, run_options = ioc_arg_parser(
+        default_prefix='',
+        desc='Simulated EPICS records IOC'
+    )
+    ioc = {{class_name}}(**ioc_options)
+    print(ioc.pvdb)
+    run(ioc.pvdb, **run_options)
