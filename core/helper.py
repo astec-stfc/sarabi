@@ -7,7 +7,8 @@ import yaml
 from .device.base_server import (
     DEFAULT_TIMESTEP,
     PVPair,
-    SimulatedPVGroup,
+    CASimulatedPVGroup,
+    PVASimulatedPVGroup,
     UpdateSignal,
 )
 from .effects.resolve import build
@@ -174,7 +175,7 @@ def construct_ca_iocs(
         default_prefix="", desc="Simulated EPICS records IOC", argv=[]
     )
     ioc_options, _ = split_args(parser.parse_args([]))
-    if issubclass(ioc_cls, SimulatedPVGroup):
+    if issubclass(ioc_cls, CASimulatedPVGroup):
         # Pairs and signals are per-device, so they are built here rather than
         # in the generated class, which is shared by every device of its type.
         pv_pairs, updates = build_simulation(pv_map, device_name, translator)
@@ -208,7 +209,15 @@ def construct_pva_iocs(
     pva_iocs = {}
     # Initialize the appropriate class based on the device name
     class_name = _verify_classname(device_name, protocol="PVA")
-    _ioc = ioc_cls()
+    if not issubclass(ioc_cls, PVASimulatedPVGroup):
+        _ioc = ioc_cls()
+    else:
+        pv_pairs, updates = build_simulation(pv_map, device_name, translator)
+        _ioc = ioc_cls(
+            timestep=DEFAULT_TIMESTEP,
+            pv_pairs=pv_pairs,
+            updates=updates,
+        )
     for key, prop in pv_map.items():
         # Use the PV name from the YAML file if available
         pv_name = prop.get(translator.identifier_word, "")

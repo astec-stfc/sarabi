@@ -11,11 +11,13 @@ Both are per-device, so they are supplied when the IOC is constructed rather
 than baked into the generated class, which is shared by all devices of a type.
 """
 
+from abc import ABC, abstractmethod
+
 from caproto.server import PVGroup
 from dataclasses import dataclass
 from typing import Callable, List
 import warnings
-
+import time
 from ..effects.resolve import call_signal
 
 DEFAULT_TIMESTEP = 0.1
@@ -62,7 +64,7 @@ class UpdateSignal:
     signal: Callable
 
 
-class SimulatedPVGroup(PVGroup):
+class SimulationPVBase:
     """A `PVGroup` that advances its simulated PVs on a fixed timestep.
 
     The timestep is chosen by whatever runs the IOCs and passed through at
@@ -78,7 +80,6 @@ class SimulatedPVGroup(PVGroup):
         updates: List[UpdateSignal] = None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
         if timestep <= 0:
             raise ValueError(f"timestep must be positive, got {timestep}")
         self.timestep = timestep
@@ -87,6 +88,134 @@ class SimulatedPVGroup(PVGroup):
         self.elapsed = 0.0
         self._driving = False
         self._missing = set()
+
+    def _channel(self, handle: str):
+        """The channel for a PV handle, or None if this device does not have it.
+
+        Devices of the same type do not all define the same PVs, so a pair or
+        update naming an absent one is skipped rather than being an error. It is
+        reported once, not on every tick.
+        """
+        channel = getattr(self, handle, None)
+        if channel is None and handle not in self._missing:
+            self._missing.add(handle)
+            warnings.warn(
+                f"{type(self).__name__} has no PV '{handle}'; not simulating it."
+            )
+        return channel
+
+
+class PVASimulatedPVGroup(SimulationPVBase):
+    """A `SimulationPVBase` that advances its simulated PVs on a fixed timestep.
+
+    The timestep is chosen by whatever runs the IOCs and passed through at
+    construction, so that every IOC in a simulated machine advances at the same
+    rate.
+    """
+
+    def __init__(
+        self,
+        *args,
+        timestep: float = DEFAULT_TIMESTEP,
+        pv_pairs: List[PVPair] = None,
+        updates: List[UpdateSignal] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            timestep=timestep,
+            pv_pairs=pv_pairs,
+            updates=updates,
+            *args,
+            **kwargs,
+        )
+
+
+    def drive(self) -> None:
+        """Advance the simulation forever, one `timestep` at a time.
+
+        Every PV in a generated IOC calls this on startup, but only the first
+        such call drives the group; the rest return immediately. Which PVs a
+        given device exposes is not known when the class is generated, so this
+        is the only way to guarantee the loop starts.
+        """
+        if self._driving or not (self.pv_pairs or self.updates):
+            return
+        self._driving = True
+        while True:
+            self.tick()
+            time.sleep(self.timestep)
+
+    def tick(self) -> None:
+        """Advance every pair and update signal by one timestep.
+
+        A PV can be driven by both a pair and an update signal -- a readback that
+        lags its setpoint and is also noisy -- so the contributions are composed
+        into one value and written once. Writing each separately would put both
+        the clean and the noisy value on the wire, and a client monitoring the PV
+        would see them alternate.
+        """
+        values = {}
+
+        for pair in self.pv_pairs:
+            setpoint = self._channel(pair.setpoint)
+            readback = self._channel(pair.readback)
+            if setpoint is None or readback is None:
+                continue
+            values[pair.readback] = (readback, pair(setpoint.current(), self.timestep))
+
+        for update in self.updates:
+            channel = self._channel(update.handle)
+            if channel is None:
+                continue
+            # Start from this tick's value where a pair has already produced one,
+            # so that noise is applied to the value the readback is moving to.
+            _, current = values.get(update.handle, (None, channel.current()))
+            values[update.handle] = (
+                channel,
+                call_signal(
+                    update.signal,
+                    t=self.elapsed,
+                    value=current,
+                    dt=self.timestep,
+                ),
+            )
+
+        for channel, value in values.values():
+            if not _values_equal(
+                value[0] if isinstance(value, tuple) else value, channel.current()
+            ):
+                raw = channel.current().raw
+                raw["value"] = value[0] if isinstance(value, tuple) else value
+                channel.post(raw)
+
+        self.elapsed += self.timestep
+
+
+class CASimulatedPVGroup(PVGroup, SimulationPVBase):
+    """A `PVGroup` that advances its simulated PVs on a fixed timestep.
+
+    The timestep is chosen by whatever runs the IOCs and passed through at
+    construction, so that every IOC in a simulated machine advances at the same
+    rate.
+    """
+
+    def __init__(
+        self,
+        *args,
+        timestep: float = DEFAULT_TIMESTEP,
+        pv_pairs: List[PVPair] = None,
+        updates: List[UpdateSignal] = None,
+        **kwargs,
+    ):
+        SimulationPVBase.__init__(
+            self,
+            timestep=timestep,
+            pv_pairs=pv_pairs,
+            updates=updates,
+            *args,
+            **kwargs,
+        )
+        PVGroup.__init__(self, *args, **kwargs)
 
     async def drive(self, async_lib) -> None:
         """Advance the simulation forever, one `timestep` at a time.
@@ -143,16 +272,3 @@ class SimulatedPVGroup(PVGroup):
                 await channel.write(value)
 
         self.elapsed += self.timestep
-
-    def _channel(self, handle: str):
-        """The channel for a PV handle, or None if this device does not have it.
-
-        Devices of the same type do not all define the same PVs, so a pair or
-        update naming an absent one is skipped rather than being an error. It is
-        reported once, not on every tick.
-        """
-        channel = getattr(self, handle, None)
-        if channel is None and handle not in self._missing:
-            self._missing.add(handle)
-            warnings.warn(f"{type(self).__name__} has no PV '{handle}'; not simulating it.")
-        return channel

@@ -6,10 +6,10 @@ from caproto import ChannelType, SkipWrite
 import numpy as np
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-from core.device.base_server import SimulatedPVGroup
+from core.device.base_server import CASimulatedPVGroup
 
 
-class {{class_name}}(SimulatedPVGroup):
+class {{class_name}}(CASimulatedPVGroup):
 {% if pv_map %}
     {% for name, config in pv_map.items() %}
         {{ name }}: pvproperty = pvproperty(
