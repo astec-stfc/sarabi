@@ -1,6 +1,6 @@
-output_directory: "./generated_iocs/nala"
+output_directory: "./generated_iocs/jfel"
 templates_directory: "./templates"
-schema_file: "./schemas/nala.json"
+schema_file: "./schemas/laura.json"
 devices_directory: "./yaml/jfel"
 ignore_device_types:
   - "FEBELaser"
