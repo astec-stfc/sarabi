@@ -1,3 +1,4 @@
+import argparse
 import threading
 import os
 import sys
@@ -17,6 +18,7 @@ from {{module[0]}}.{{module[1]}} import {{ module[1]}}
 
 from core.translator import SchemaTranslator
 from core import helper as helper
+from core.device.base_server import DEFAULT_TIMESTEP
 
 os.environ["EPICS_CA_SERVER_PORT"] = os.getenv("EPICS_CA_SERVER_PORT", "6090")
 os.environ["EPICS_PVA_SERVER_PORT"] = os.getenv("EPICS_PVA_SERVER_PORT", "6091")
@@ -56,7 +58,8 @@ def run_pva_ioc(iocs: Dict[str, SharedPV], stop_event) -> None:
             time.sleep(0.1)
 
 
-def _construct_iocs() -> None:
+def _construct_iocs(timestep: float = DEFAULT_TIMESTEP) -> None:
+    """Build every IOC, advancing their simulated PVs on `timestep` seconds."""
     _ca_iocs = {}
     _pva_iocs = {}
     iocs_managers = []
@@ -70,7 +73,11 @@ def _construct_iocs() -> None:
                 if ca_pv_map and _ca_ioc_cls:
                     _ca_iocs.update(
                         helper.construct_ca_iocs(
-                            ca_pv_map, name, ioc_cls=_ca_ioc_cls, translator=translator
+                            ca_pv_map,
+                            name,
+                            ioc_cls=_ca_ioc_cls,
+                            translator=translator,
+                            timestep=timestep,
                         )
                     )
                 if pva_pv_map and _pva_ioc_cls:
@@ -86,8 +93,20 @@ def _construct_iocs() -> None:
     return iocs_managers
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Run the simulated IOCs.")
+    parser.add_argument(
+        "--timestep",
+        type=float,
+        default=DEFAULT_TIMESTEP,
+        help="Interval, in seconds, on which simulated PVs are advanced.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    ioc_managers = _construct_iocs()
+    args = parse_arguments()
+    ioc_managers = _construct_iocs(timestep=args.timestep)
     ca_iocs = {}
     pva_iocs = {}
     for manager in ioc_managers:

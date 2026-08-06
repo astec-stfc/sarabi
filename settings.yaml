@@ -1,7 +1,7 @@
 output_directory: "./generated_iocs/nala"
 templates_directory: "./templates"
 schema_file: "./schemas/nala.json"
-devices_directory: "./yaml/nala"
+devices_directory: "./yaml/jfel"
 ignore_device_types:
   - "FEBELaser"
   - "PILaser"

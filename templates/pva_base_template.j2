@@ -2,12 +2,42 @@
 from p4p.server import Server, ServerOperation
 from p4p.server.thread import SharedPV
 from p4p.nt import NTScalar, NTEnum
+from typing import Callable
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from core.device.base_server import PVASimulatedPVGroup
 import time
+import threading
 
 class Handler:
     """
     Handler class for processing 'put' operations on PVs.
     """
+
+    def __init__(self, drive: Callable = None):
+        """
+        Initializes the Handler with an optional drive callable.
+
+        Args:
+            drive (Callable, optional): A callable to be invoked on 'put' operations.
+        """
+        self.drive = drive
+        self.started = False
+
+    def onFirstConnect(self, pv: SharedPV) -> None:
+        """
+        Called when the first client connects to the PV.
+
+        Args:
+            pv (SharedPV): The process variable that was connected.
+        """
+        if not self.started:
+            self.started = True
+            threading.Thread(
+                target=self.drive,
+                daemon=True,
+            ).start()
 
     def put(self, pv: SharedPV, op: ServerOperation):
         """
@@ -41,6 +71,16 @@ class EnumHandler(Handler):
         nanoseconds = int((timestamp % 1) * 1e9)
         return seconds, nanoseconds
 
+    def onFirstConnect(self, pv: SharedPV) -> None:
+        """
+        Called when the first client connects to the PV.
+
+        Args:
+            pv (SharedPV): The process variable that was connected.
+        """
+        # This method can be used to initialize or log information when the first client connects.
+        pass
+
     def put(self, pv, op):
         if not op.value().changed("timeStamp"):
             seconds, nanoseconds = EnumHandler.time_in_seconds_and_nanoseconds(time.time())
@@ -52,13 +92,13 @@ class EnumHandler(Handler):
         pv.post(op.value())
         op.done()
 
-class {{class_name}}:
+class {{class_name}}(PVASimulatedPVGroup):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields = {}
     {% for name, config in pv_map.items() %}
         {% if config.dtype == "statistical" or config.dtype == "scalar" or config.dtype == "float" or config.dtype=="int"%}
-        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
+        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
         {% elif config.dtype == "state" %}
         self.{{name}} = SharedPV(nt=NTEnum(),
             handler=EnumHandler(),
@@ -70,17 +110,17 @@ class {{class_name}}:
             initial=0
         )
         {% elif config.dtype == "waveform" %}
-        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
         {% elif config.dtype == "string" %}
-        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(self.drive), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
         {% elif config.dtype == "binary" %}
-        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
         {% endif %}
     {% endfor %}
     # The following PVs may not exist for all IOCs of this type.
     {% for name, config in unique_pv_map.items() %}
         {% if config.dtype == "statistical" or config.dtype == "scalar" or config.dtype == "float" or config.dtype=="int"%}
-        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
+        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
         {% elif config.dtype == "state" %}
         self.{{name}} = SharedPV(nt=NTEnum(),
             handler=EnumHandler(),
@@ -92,11 +132,11 @@ class {{class_name}}:
             initial=0
         )
         {% elif config.dtype == "waveform" %}
-        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
         {% elif config.dtype == "string" %}
-        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(self.drive), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
         {% elif config.dtype == "binary" %}
-        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
+        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(self.drive), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
         {% endif %}
     {% endfor %}
 {%endif%}
