@@ -64,20 +64,20 @@ identifier, and give the `dynamics` that relate them:
 
 ```yaml
 SETI:
-  identifier: CLA-S02-MAG-QUAD-03:SETI
+  identifier: JFEL-S02-MAG-QUAD-03:SETI
   readback: READI
   dynamics:
     model: laura.utils.dynamics.FirstOrderResponse
     tau: 0.5
 READI:
-  identifier: CLA-S02-MAG-QUAD-03:READI
+  identifier: JFEL-S02-MAG-QUAD-03:READI
 ```
 
 An **update signal** generates a PV's value on every timestep:
 
 ```yaml
 READK:
-  identifier: CLA-S02-MAG-QUAD-03:READK
+  identifier: JFEL-S02-MAG-QUAD-03:READK
   update:
     function: laura.utils.signals.Sinusoid
     period: 10.0
