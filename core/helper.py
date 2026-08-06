@@ -14,6 +14,7 @@ from .device.base_server import (
 from .effects.resolve import build
 from .translator import SchemaTranslator
 from .IOCManager import IOCManager
+from .yaml_loader import iter_yaml_files, is_schema_yaml, resolve_device_config
 
 
 def separate_by_protocol(pv_map: Dict) -> Tuple[
@@ -237,18 +238,17 @@ def _get_device_info(
     yaml_dir: str, translator: SchemaTranslator
 ) -> List[Dict[str, Dict]]:
     device_info = []
-    for filename in os.listdir(yaml_dir):
-        yaml_file_path = os.path.join(yaml_dir, filename)
-        if filename.endswith(".yaml"):
-            with open(yaml_file_path) as f:
-                data = yaml.safe_load(f)
-            device_name = data.get("name", os.path.splitext(filename)[0])
-            pv_map = data.get(translator.controls_information_word, {}).get(
-                translator.signal_information_word, {}
-            )
-            if pv_map:
-                # only add valid controls information
-                device_info.append({device_name: pv_map})
+    for yaml_file_path in iter_yaml_files(yaml_dir, recursive=False):
+        if is_schema_yaml(yaml_file_path):
+            continue
+        try:
+            resolved = resolve_device_config(yaml_file_path, translator)
+        except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
+            warnings.warn(f"Skipping '{yaml_file_path}': {exc}")
+            continue
+        if resolved.pv_map:
+            # only add valid controls information
+            device_info.append({resolved.device_name: resolved.pv_map})
     return device_info
 
 
