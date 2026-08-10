@@ -1,7 +1,7 @@
-output_directory: "./generated_iocs/jfel"
+output_directory: "./generated_iocs/JFEL"
 templates_directory: "./templates"
 schema_file: "./schemas/laura.json"
-devices_directory: "./yaml/jfel"
+devices_directory: "./yaml/JFEL"
 ignore_device_types:
   - "FEBELaser"
   - "PILaser"
