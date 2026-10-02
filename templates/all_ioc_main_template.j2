@@ -1,3 +1,4 @@
+import argparse
 import threading
 import os
 import sys
@@ -9,7 +10,8 @@ from caproto.server import run
 from p4p.server import Server
 from p4p.server.thread import SharedPV
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
+# First, so that another package called "core" is not found in place of SARABI's
+sys.path.insert(0, r"{{ sarabi_root }}")
 
 {% for module in imports %}
 from {{module[0]}}.{{module[1]}} import {{ module[1]}}
@@ -17,10 +19,10 @@ from {{module[0]}}.{{module[1]}} import {{ module[1]}}
 
 from core.translator import SchemaTranslator
 from core import helper as helper
+from core.discovery import find_device_files
+from core.device.base_server import DEFAULT_TIMESTEP
 
-os.environ["EPICS_CA_SERVER_PORT"] = os.getenv("EPICS_CA_SERVER_PORT", "6090")
-os.environ["EPICS_PVA_SERVER_PORT"] = os.getenv("EPICS_PVA_SERVER_PORT", "6091")
-os.environ["EPICS_CA_ADDR_LIST"] = "localhost"
+helper.configure_epics_environment()
 
 yaml_dir = r"{{ yaml_dir }}"
 translator_spec = r"{{ translator_file }}"
@@ -34,13 +36,9 @@ DEVICE_IOC_CLASS_MAP = {
     {% endfor %}
 }
 
-# Get all device types and paths to yaml directory
-DEVICE_FOLDERS = {
-    device_type: os.path.join(root, device_type)
-    for root, dir, _ in os.walk(yaml_dir)
-    for device_type in dir
-    if os.path.isdir(os.path.join(root, device_type))
-}
+# Get all device types and their yaml files, as the IOC classes were rendered
+# from: a file belongs to the type of the folder it is in, wherever that is.
+DEVICE_FILES = find_device_files(yaml_dir)
 
 translator = SchemaTranslator(translator_spec)
 
@@ -56,12 +54,13 @@ def run_pva_ioc(iocs: Dict[str, SharedPV], stop_event) -> None:
             time.sleep(0.1)
 
 
-def _construct_iocs() -> None:
+def _construct_iocs(timestep: float = DEFAULT_TIMESTEP) -> None:
+    """Build every IOC, advancing their simulated PVs on `timestep` seconds."""
     _ca_iocs = {}
     _pva_iocs = {}
     iocs_managers = []
-    for device_type, folder in DEVICE_FOLDERS.items():
-        for device in helper._get_device_info(folder, translator=translator):
+    for device_type, yaml_files in DEVICE_FILES.items():
+        for device in helper.get_device_info(yaml_files, translator=translator):
             for name, pv_map in device.items():
                 ca_pv_map, pva_pv_map = helper.separate_by_protocol(pv_map)
                 _ioc_cls_map = DEVICE_IOC_CLASS_MAP.get(device_type, {})
@@ -70,7 +69,11 @@ def _construct_iocs() -> None:
                 if ca_pv_map and _ca_ioc_cls:
                     _ca_iocs.update(
                         helper.construct_ca_iocs(
-                            ca_pv_map, name, ioc_cls=_ca_ioc_cls, translator=translator
+                            ca_pv_map,
+                            name,
+                            ioc_cls=_ca_ioc_cls,
+                            translator=translator,
+                            timestep=timestep,
                         )
                     )
                 if pva_pv_map and _pva_ioc_cls:
@@ -86,8 +89,20 @@ def _construct_iocs() -> None:
     return iocs_managers
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Run the simulated IOCs.")
+    parser.add_argument(
+        "--timestep",
+        type=float,
+        default=DEFAULT_TIMESTEP,
+        help="Interval, in seconds, on which simulated PVs are advanced.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    ioc_managers = _construct_iocs()
+    args = parse_arguments()
+    ioc_managers = _construct_iocs(timestep=args.timestep)
     ca_iocs = {}
     pva_iocs = {}
     for manager in ioc_managers:

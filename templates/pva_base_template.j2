@@ -1,13 +1,43 @@
-{% if pv_map %}
+{% if pv_map or unique_pv_map %}
 from p4p.server import Server, ServerOperation
 from p4p.server.thread import SharedPV
 from p4p.nt import NTScalar, NTEnum
+from typing import Callable
+import sys
+# First, so that another package called "core" is not found in place of SARABI's
+sys.path.insert(0, r"{{ sarabi_root }}")
+from core.device.base_server import PVASimulatedPVGroup
 import time
+import threading
 
 class Handler:
     """
     Handler class for processing 'put' operations on PVs.
     """
+
+    def __init__(self, drive: Callable = None):
+        """
+        Initializes the Handler with an optional drive callable.
+
+        Args:
+            drive (Callable, optional): A callable to be invoked on 'put' operations.
+        """
+        self.drive = drive
+        self.started = False
+
+    def onFirstConnect(self, pv: SharedPV) -> None:
+        """
+        Called when the first client connects to the PV.
+
+        Args:
+            pv (SharedPV): The process variable that was connected.
+        """
+        if not self.started:
+            self.started = True
+            threading.Thread(
+                target=self.drive,
+                daemon=True,
+            ).start()
 
     def put(self, pv: SharedPV, op: ServerOperation):
         """
@@ -26,77 +56,53 @@ class Handler:
         op.done()
 
 class EnumHandler(Handler):
+    """
+    Handler for enumerations, which are put to as any other PV is.
+    """
 
-    def time_in_seconds_and_nanoseconds(timestamp: float):
+    def onFirstConnect(self, pv: SharedPV) -> None:
         """
-        Converts a floating-point timestamp into seconds and nanoseconds.
+        Called when the first client connects to the PV.
 
         Args:
-            timestamp (float): The timestamp to convert.
-
-        Returns:
-            tuple: (seconds, nanoseconds)
+            pv (SharedPV): The process variable that was connected.
         """
-        seconds = int(timestamp)
-        nanoseconds = int((timestamp % 1) * 1e9)
-        return seconds, nanoseconds
+        # This method can be used to initialize or log information when the first client connects.
+        pass
 
-    def put(self, pv, op):
-        if not op.value().changed("timeStamp"):
-            seconds, nanoseconds = EnumHandler.time_in_seconds_and_nanoseconds(time.time())
-            op.value()["timeStamp"] = {
-                "secondsPastEpoch": seconds,
-                "nanoseconds": nanoseconds,
-                "userTag": 0,
-            }
-        pv.post(op.value())
-        op.done()
-
-class {{class_name}}:
+class {{class_name}}(PVASimulatedPVGroup):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields = {}
     {% for name, config in pv_map.items() %}
-        {% if config.dtype == "statistical" or config.dtype == "scalar" or config.dtype == "float" or config.dtype=="int"%}
-        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
-        {% elif config.dtype == "state" %}
+        {% if kinds[name] == "state" %}
         self.{{name}} = SharedPV(nt=NTEnum(),
             handler=EnumHandler(),
-            enum_strings=[
+            choices=[
                 {% for key, _ in config.states|dictsort(by='value') %}
-                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {{ key|pystr }}{% if not loop.last %}, {% endif %}
                 {% endfor %}
             ],
             initial=0
         )
-        {% elif config.dtype == "waveform" %}
-        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
-        {% elif config.dtype == "string" %}
-        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
-        {% elif config.dtype == "binary" %}
-        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
+        {% else %}
+        self.{{name}} = SharedPV(nt=NTScalar("{{ dtype_map[kinds[name]].code }}"), handler=Handler(self.drive), initial={{ dtype_map[kinds[name]].initial }})
         {% endif %}
     {% endfor %}
     # The following PVs may not exist for all IOCs of this type.
     {% for name, config in unique_pv_map.items() %}
-        {% if config.dtype == "statistical" or config.dtype == "scalar" or config.dtype == "float" or config.dtype=="int"%}
-        self.{{name}} = SharedPV(nt=NTScalar("d"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else '0.0' }})
-        {% elif config.dtype == "state" %}
+        {% if kinds[name] == "state" %}
         self.{{name}} = SharedPV(nt=NTEnum(),
             handler=EnumHandler(),
-            enum_strings=[
+            choices=[
                 {% for key, _ in config.states|dictsort(by='value') %}
-                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {{ key|pystr }}{% if not loop.last %}, {% endif %}
                 {% endfor %}
             ],
             initial=0
         )
-        {% elif config.dtype == "waveform" %}
-        self.{{name}} = SharedPV(nt=NTScalar("ad"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else [] }}, on_put=self.{{name}}_on_put,)
-        {% elif config.dtype == "string" %}
-        self.{{name}} = SharedPV(nt=NTScalar("s"), handler=Handler(), initial="{{ dtype_map[config.dtype].initial if config.dtype is defined else '' }}", on_put=self.{{name}}_on_put,)
-        {% elif config.dtype == "binary" %}
-        self.{{name}} = SharedPV(nt=NTScalar("b"), handler=Handler(), initial={{ dtype_map[config.dtype].initial if config.dtype is defined else 'b""' }}, on_put=self.{{name}}_on_put,)
+        {% else %}
+        self.{{name}} = SharedPV(nt=NTScalar("{{ dtype_map[kinds[name]].code }}"), handler=Handler(self.drive), initial={{ dtype_map[kinds[name]].initial }})
         {% endif %}
     {% endfor %}
 {%endif%}

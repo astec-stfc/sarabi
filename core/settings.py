@@ -68,6 +68,29 @@ class Settings:
     def all_ioc_main_template_file(self) -> str:
         return os.path.join(self.templates_directory, "all_ioc_main_template.j2")
 
+    def _template_file(self, filename: str) -> str:
+        """A template added since `templates_directory` may have been copied.
+
+        Falls back to the one distributed with SARABI, so that a directory of
+        customised templates does not have to gain each new one to keep working.
+        """
+        template_file = os.path.join(self.templates_directory, filename)
+        if os.path.exists(template_file):
+            return template_file
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "templates",
+            filename,
+        )
+
+    @property
+    def tango_base_template_file(self) -> str:
+        return self._template_file("tango_base_template.j2")
+
+    @property
+    def tango_main_template_file(self) -> str:
+        return self._template_file("tango_main_template.j2")
+
     def _validate_schema(self, schema_file) -> str:
         if not os.path.exists(schema_file):
             raise FileNotFoundError(f"Could not find schema file: {schema_file}")

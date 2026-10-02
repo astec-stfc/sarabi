@@ -1,49 +1,61 @@
-from caproto.server import PVGroup, pvproperty, ioc_arg_parser, run
+import sys
+
+from caproto.server import pvproperty, ioc_arg_parser, run
 from caproto import ChannelType, SkipWrite
 import numpy as np
 
+# First, so that another package called "core" is not found in place of SARABI's
+sys.path.insert(0, r"{{ sarabi_root }}")
+from core.device.base_server import CASimulatedPVGroup
 
-class {{class_name}}(PVGroup):
-{% if pv_map %}
+
+class {{class_name}}(CASimulatedPVGroup):
+{% if pv_map or unique_pv_map %}
     {% for name, config in pv_map.items() %}
         {{ name }}: pvproperty = pvproperty(
-            value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
-            dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
-            {% if config.type is defined and config.type == "state" %}
+            value={{ dtype_map[kinds[name]].initial }},
+            dtype={{ dtype_map[kinds[name]].dtype }},
+            {% if dtype_map[kinds[name]].max_length is defined %}max_length={{ dtype_map[kinds[name]].max_length }},
+            {% endif %}
+            {% if kinds[name] == "state" %}
             enum_strings=[
                 {% for key, _ in config.states|dictsort(by='value') %}
-                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {{ key|pystr }}{% if not loop.last %}, {% endif %}
                 {% endfor %}
             ],
             {% endif %}
-            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
-            doc="{{ config.description if config.description is defined else 'default description.' }}",
+            {% if config.units is defined and dtype_map[kinds[name]].units %}units={{ config.units|pystr }},{% endif %}
+            doc={{ (config.description if config.description is defined else 'default description.')|pystr }},
         )
     {% endfor %}
     # The following PVs may not exist for all IOCs of this type.
     {% for name, config in unique_pv_map.items() %}
         {{ name }}: pvproperty | None = pvproperty(
-            value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
-            dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
-            {% if config.type is defined and config.type == "state" %}
+            value={{ dtype_map[kinds[name]].initial }},
+            {% if dtype_map[kinds[name]].max_length is defined %}max_length={{ dtype_map[kinds[name]].max_length }},
+            {% endif %}
+            dtype={{ dtype_map[kinds[name]].dtype }},
+            {% if kinds[name] == "state" %}
             enum_strings=[
                 {% for key, _ in config.states|dictsort(by='value') %}
-                "{{ key }}"{% if not loop.last %}, {% endif %}
+                {{ key|pystr }}{% if not loop.last %}, {% endif %}
                 {% endfor %}
             ],
             {% endif %}
-            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
-            doc="{{ config.description if config.description is defined else 'default description.' }}",
+            {% if config.units is defined and dtype_map[kinds[name]].units %}units={{ config.units|pystr }},{% endif %}
+            doc={{ (config.description if config.description is defined else 'default description.')|pystr }},
         )
     {% endfor %}
-    {% for name, config in pv_map.items() %}
-        @{{ name }}.scan(period=1.0)
+    # Setpoint/readback pairs and update signals differ per device, so they are
+    # supplied at construction and advanced by the group. Every PV asks the group
+    # to start; only the first call drives it, the rest return immediately. That
+    # includes the PVs only some devices have, which may be all a device has.
+    {% for name, config in pv_map.items()|list + unique_pv_map.items()|list %}
+        @{{ name }}.startup
         async def {{ name }}(self, instance, async_lib):
-            # This is a placeholder for custom logic to update the PV value.
-            # Replace with actual implementation as needed.
-            pass
-        
-        {% if config.type is defined and config.type == "state"%}
+            await self.drive(async_lib)
+
+        {% if kinds[name] == "state" %}
         @{{ name }}.putter
         async def {{ name }}(self, instance, value):
             if isinstance(value, str):

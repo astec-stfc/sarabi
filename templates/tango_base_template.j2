@@ -1,0 +1,70 @@
+{% macro arguments(name, config) %}
+{% if kinds[name] == "state" %}
+            dtype="DevEnum",
+            enum_labels=[
+                {% for key, _ in config.states|dictsort(by='value') %}
+                {{ key|pystr }},
+                {% endfor %}
+            ],
+{% else %}
+            dtype={{ dtype_map[kinds[name]].dtype }},
+{% endif %}
+{% if dtype_map[kinds[name]].max_length is defined %}
+            max_dim_x={{ dtype_map[kinds[name]].max_length }},
+{% endif %}
+{% if config.get("units") %}
+            unit={{ config.units|pystr }},
+{% endif %}
+            doc={{ (config.get(description_word) or 'default description.')|pystr }},
+{% endmacro %}
+import sys
+
+from tango import AttrWriteType
+from tango.server import attribute, run
+
+# First, so that another package called "core" is not found in place of SARABI's
+sys.path.insert(0, r"{{ sarabi_root }}")
+from core.device.tango_server import TangoSimulatedDevice
+
+
+class {{ class_name }}(TangoSimulatedDevice):
+    INITIAL_VALUES = {
+    {% for name, config in pv_map.items() %}
+        "{{ name }}": {{ dtype_map[kinds[name]].initial }},
+    {% endfor %}
+    {% for name, config in unique_pv_map.items() %}
+        "{{ name }}": {{ dtype_map[kinds[name]].initial }},
+    {% endfor %}
+    }
+
+    # The following attributes may not exist for all devices of this type, so
+    # they are added to the devices whose definitions have them.
+    OPTIONAL_ATTRIBUTES = {
+    {% for name, config in unique_pv_map.items() %}
+        "{{ name }}": dict(
+{{ arguments(name, config) }}
+        ),
+    {% endfor %}
+    }
+
+    {% for name, config in pv_map.items() %}
+    {{ name }} = attribute(
+            access=AttrWriteType.READ_WRITE,
+{{ arguments(name, config) }}
+    )
+    {% endfor %}
+
+    # Values are held per device rather than by this class, which is shared by
+    # every device of its type, as are the setpoint/readback pairs and update
+    # signals advancing them.
+    {% for name, config in pv_map.items() %}
+    def read_{{ name }}(self):
+        return self.read_value("{{ name }}")
+
+    def write_{{ name }}(self, value):
+        self.write_value("{{ name }}", value)
+
+    {% endfor %}
+
+if __name__ == "__main__":
+    run(({{ class_name }},))

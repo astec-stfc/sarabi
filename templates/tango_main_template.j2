@@ -1,0 +1,27 @@
+import sys
+
+# First, so that another package called "core" is not found in place of SARABI's
+sys.path.insert(0, r"{{ sarabi_root }}")
+
+{% for device_type, module, class_name in imports %}
+from {{ module }} import {{ class_name }}
+{% endfor %}
+
+from core.translator import SchemaTranslator
+from core import tango_helper as helper
+
+yaml_dir = r"{{ yaml_dir }}"
+translator_spec = r"{{ translator_file }}"
+translator = SchemaTranslator(translator_spec)
+
+# One device server serves every device, of every type, as TANGO intends. The
+# class serving each device type:
+DEVICE_CLASS_MAP = {
+    {% for device_type, module, class_name in imports %}
+    "{{ device_type }}": {{ class_name }},
+    {% endfor %}
+}
+
+if __name__ == "__main__":
+    args = helper.parse_arguments()
+    helper.serve(DEVICE_CLASS_MAP, yaml_dir, translator, args)

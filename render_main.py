@@ -2,11 +2,26 @@ import os
 from pathlib import Path
 from jinja2 import Template
 import argparse
+from core.discovery import find_device_files
 from core.settings import Settings
 import yaml
 import format as formatter
 
 SETTINGS = None
+
+SARABI_ROOT = os.path.dirname(os.path.abspath(__file__))
+TANGO_SUFFIX = "BaseTangoDevice"
+# Scripts rendered here, rather than modules for them to import
+RENDERED_MAINS = ("__init__.py", "main.py", "tango_main.py")
+
+
+def _protocol_of_module(module_name: str) -> str:
+    """The protocol served by a generated module, going by how it is named."""
+    if module_name.endswith(TANGO_SUFFIX):
+        return "TANGO"
+    if "PVA" in module_name:
+        return "PVA"
+    return "CA"
 
 
 def _load_settings(settings_yaml: str) -> Settings:
@@ -31,22 +46,19 @@ def parse_arguments():
 
 def _find_device_yaml_folder(yaml_dir: str, device_type: str):
     """
-    Search recursively under yaml_dir/device_type and return the absolute path
-    of the first directory that contains at least one .yaml or .yml file.
+    Return the absolute path of the first folder of `device_type` under
+    yaml_dir, which is one named exactly that and holding .yaml or .yml files.
 
-    Raises FileNotFoundError if the device_type folder doesn't exist or no YAML
-    files are found beneath it.
+    Raises FileNotFoundError if yaml_dir doesn't exist or has no such folder.
     """
     start_dir = Path(yaml_dir)
     if not start_dir.exists() or not start_dir.is_dir():
         raise FileNotFoundError(f"Root device directory not found: {start_dir}")
 
-    for root, _, files in os.walk(start_dir):
-        if device_type in root:
-            if any(f.lower().endswith((".yaml", ".yml")) for f in files):
-                return os.path.abspath(root)
-
-    raise FileNotFoundError(f"No YAML files found under {start_dir}")
+    yaml_files = find_device_files(yaml_dir).get(device_type)
+    if not yaml_files:
+        raise FileNotFoundError(f"No YAML files found for {device_type} under {start_dir}")
+    return os.path.abspath(os.path.dirname(yaml_files[0]))
 
 
 if __name__ == "__main__":
@@ -71,7 +83,7 @@ if __name__ == "__main__":
             for filename in files:
                 if not filename.endswith(".py"):
                     continue
-                if filename in ("__init__.py", "main.py"):
+                if filename in RENDERED_MAINS:
                     continue
 
                 # module import path relative to the device_type package
@@ -96,17 +108,48 @@ if __name__ == "__main__":
     print(f"Found device types: {all_device_types}")
     all_ioc_classes = []
     all_ioc_modules = []
+    all_tango_modules = []
+    with open(SETTINGS.tango_main_template_file) as f:
+        tango_template = Template(f.read())
     for device_type, files in device_groups.items():
         ioc_modules = []
         ioc_classes = []
+        tango_modules = []
         for module_import, module_name in files:
             # module_name is the class/module stem; module_import is the relative dotted path
+            if _protocol_of_module(module_name) == "TANGO":
+                # Served by a device server of its own, so that the IOCs do not
+                # need TANGO installed, nor the device server EPICS.
+                tango_modules.append((device_type, module_name))
+                continue
             ioc_modules.append((device_type, module_name))
             ioc_classes.append(module_name)
-        yaml_dir = _find_device_yaml_folder(SETTINGS.devices_directory, device_type)
+        if tango_modules:
+            rendered = tango_template.render(
+                sarabi_root=SARABI_ROOT,
+                yaml_dir=SETTINGS.devices_directory,
+                translator_file=os.path.abspath(SETTINGS.schema_file),
+                imports=[(d, name, name) for d, name in tango_modules],
+            )
+            with open(
+                os.path.join(SETTINGS.output_directory, device_type, "tango_main.py"),
+                "w",
+            ) as f:
+                f.write(rendered)
+            all_tango_modules.extend(tango_modules)
+        if not ioc_modules:
+            continue
+        try:
+            yaml_dir = _find_device_yaml_folder(SETTINGS.devices_directory, device_type)
+        except FileNotFoundError:
+            # Rendered from definitions that have since been removed or renamed
+            print(f"Found no definitions for {device_type}, not rendering its main.py.")
+            continue
         rendered = template.render(
             device_type=device_type,
+            sarabi_root=SARABI_ROOT,
             yaml_root=yaml_dir,
+            devices_directory=SETTINGS.devices_directory,
             translator_file=os.path.abspath(SETTINGS.schema_file),
             imports=ioc_modules,
         )
@@ -123,13 +166,12 @@ if __name__ == "__main__":
     for module in all_ioc_modules:
         device_type = module[0]
         class_name = module[1]
-        if "PVA" in class_name:
-            device_ioc_class_map.setdefault(device_type, {})["PVA"] = class_name
-        else:
-            device_ioc_class_map.setdefault(device_type, {})["CA"] = class_name
+        protocol = _protocol_of_module(class_name)
+        device_ioc_class_map.setdefault(device_type, {})[protocol] = class_name
     with open(SETTINGS.all_ioc_main_template_file) as f:
         run_all_template = Template(f.read())
     rendered_all = run_all_template.render(
+        sarabi_root=SARABI_ROOT,
         device_ioc_class_map=device_ioc_class_map,
         yaml_dir=SETTINGS.devices_directory,
         translator_file=os.path.abspath(SETTINGS.schema_file),
@@ -137,5 +179,16 @@ if __name__ == "__main__":
     )
     with open(os.path.join(SETTINGS.output_directory, "run_all_iocs.py"), "w") as f:
         f.write(rendered_all)
+    if all_tango_modules:
+        rendered_all_tango = tango_template.render(
+            sarabi_root=SARABI_ROOT,
+            yaml_dir=SETTINGS.devices_directory,
+            translator_file=os.path.abspath(SETTINGS.schema_file),
+            imports=[(d, f"{d}.{name}", name) for d, name in all_tango_modules],
+        )
+        with open(
+            os.path.join(SETTINGS.output_directory, "run_all_tango.py"), "w"
+        ) as f:
+            f.write(rendered_all_tango)
     formatter.run_black(SETTINGS.output_directory)
     print("run_all_iocs.py generated with all IOC classes.")

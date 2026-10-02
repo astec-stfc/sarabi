@@ -1,0 +1,15 @@
+# Byte-compiled Python
+__pycache__/
+*.py[cod]
+
+# Test runs
+.pytest_cache/
+
+# IDE settings
+.idea/
+
+# Device definitions, which live in their own repositories
+yaml/*
+
+# IOC sources, which are rendered from those definitions
+generated_iocs/*
