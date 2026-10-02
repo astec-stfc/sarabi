@@ -52,3 +52,48 @@ Each PV defined in your device yaml files will have been prepended with `VM-` to
 To use any EPICS cli tools you must set the following environment variables first:
 - `EPICS_CA_SERVER_PORT=6090`
 - `EPICS_CA_ADDR_LIST=localhost`
+
+## Simulated dynamics
+
+PVs can do more than hold the value last written to them. Two behaviours are read from the device
+YAML and driven by the generated IOCs.
+
+A **setpoint/readback pair** makes a readback follow its setpoint over time, rather than instantly.
+Link the two with `readback` (or `setpoint`, from the other end), naming either the PV handle or its
+identifier, and give the `dynamics` that relate them:
+
+```yaml
+SETI:
+  identifier: JFEL-S02-MAG-QUAD-03:SETI
+  readback: READI
+  dynamics:
+    model: laura.utils.dynamics.FirstOrderResponse
+    tau: 0.5
+READI:
+  identifier: JFEL-S02-MAG-QUAD-03:READI
+```
+
+An **update signal** generates a PV's value on every timestep:
+
+```yaml
+READK:
+  identifier: JFEL-S02-MAG-QUAD-03:READK
+  update:
+    function: laura.utils.signals.Sinusoid
+    period: 10.0
+    amplitude: 0.5
+```
+
+`model` and `function` are fully qualified import paths, and the remaining keys are the arguments to
+that class. SARABI imports whatever the path names and does not depend on the package it comes from:
+the paths above need LAURA importable at run time, but a definition naming your own
+`mypackage.signals.MyModel` needs nothing else installed.
+
+A response model is called as `model(target, dt)` and is stateful, holding one instance per readback.
+A signal may declare any of `t`, `value` and `dt` as arguments, and is passed the ones it asks for.
+
+Both are advanced on a single timestep shared by every IOC, given when the IOCs are started:
+
+```bash
+python main.py --timestep=0.05      # default 0.1 s
+```

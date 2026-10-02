@@ -1,14 +1,22 @@
-from caproto.server import PVGroup, pvproperty, ioc_arg_parser, run
+import os
+import sys
+
+from caproto.server import pvproperty, ioc_arg_parser, run
 from caproto import ChannelType, SkipWrite
 import numpy as np
 
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from core.device.base_server import CASimulatedPVGroup
 
-class {{class_name}}(PVGroup):
+
+class {{class_name}}(CASimulatedPVGroup):
 {% if pv_map %}
     {% for name, config in pv_map.items() %}
         {{ name }}: pvproperty = pvproperty(
             value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
             dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
+            {% if config.type is defined and dtype_map[config.type].max_length is defined %}max_length={{ dtype_map[config.type].max_length }},
+            {% endif %}
             {% if config.type is defined and config.type == "state" %}
             enum_strings=[
                 {% for key, _ in config.states|dictsort(by='value') %}
@@ -24,6 +32,8 @@ class {{class_name}}(PVGroup):
     {% for name, config in unique_pv_map.items() %}
         {{ name }}: pvproperty | None = pvproperty(
             value={{ dtype_map[config.type].initial if config.type is defined else '0.0' }},
+            {% if config.type is defined and dtype_map[config.type].max_length is defined %}max_length={{ dtype_map[config.type].max_length }},
+            {% endif %}
             dtype={{ dtype_map[config.type].dtype if config.type is defined else 'ChannelType.FLOAT' }},
             {% if config.type is defined and config.type == "state" %}
             enum_strings=[
@@ -36,13 +46,14 @@ class {{class_name}}(PVGroup):
             doc="{{ config.description if config.description is defined else 'default description.' }}",
         )
     {% endfor %}
+    # Setpoint/readback pairs and update signals differ per device, so they are
+    # supplied at construction and advanced by the group. Every PV asks the group
+    # to start; only the first call drives it, the rest return immediately.
     {% for name, config in pv_map.items() %}
-        @{{ name }}.scan(period=1.0)
+        @{{ name }}.startup
         async def {{ name }}(self, instance, async_lib):
-            # This is a placeholder for custom logic to update the PV value.
-            # Replace with actual implementation as needed.
-            pass
-        
+            await self.drive(async_lib)
+
         {% if config.type is defined and config.type == "state"%}
         @{{ name }}.putter
         async def {{ name }}(self, instance, value):
