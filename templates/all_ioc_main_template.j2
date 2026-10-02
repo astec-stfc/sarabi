@@ -1,3 +1,4 @@
+import argparse
 import threading
 import os
 import sys
@@ -17,10 +18,16 @@ from {{module[0]}}.{{module[1]}} import {{ module[1]}}
 
 from core.translator import SchemaTranslator
 from core import helper as helper
+from core import tango_helper
+from core.device.base_server import DEFAULT_TIMESTEP
 
 os.environ["EPICS_CA_SERVER_PORT"] = os.getenv("EPICS_CA_SERVER_PORT", "6090")
 os.environ["EPICS_PVA_SERVER_PORT"] = os.getenv("EPICS_PVA_SERVER_PORT", "6091")
 os.environ["EPICS_CA_ADDR_LIST"] = "localhost"
+# TANGO devices are served without a database, on a port of their own; see
+# core.tango_helper for how they are addressed.
+os.environ.setdefault("SARABI_TANGO_HOST", str(tango_helper.DEFAULT_TANGO_HOST))
+os.environ.setdefault("SARABI_TANGO_PORT", str(tango_helper.DEFAULT_TANGO_PORT))
 
 yaml_dir = r"{{ yaml_dir }}"
 translator_spec = r"{{ translator_file }}"
@@ -56,21 +63,37 @@ def run_pva_ioc(iocs: Dict[str, SharedPV], stop_event) -> None:
             time.sleep(0.1)
 
 
-def _construct_iocs() -> None:
+def run_tango_server(devices_by_class: Dict, stop_event, ready_event) -> None:
+    # TANGO allows one server per process, so every device type is hosted by
+    # this one, from a file database written at startup.
+    tango_helper.run_tango_server(
+        devices_by_class, stop_event=stop_event, ready_event=ready_event
+    )
+
+
+def _construct_iocs(timestep: float = DEFAULT_TIMESTEP) -> None:
+    """Build every IOC, advancing their simulated PVs on `timestep` seconds."""
     _ca_iocs = {}
     _pva_iocs = {}
+    _tango_devices = {}
+    _tango_classes = {}
     iocs_managers = []
     for device_type, folder in DEVICE_FOLDERS.items():
         for device in helper._get_device_info(folder, translator=translator):
             for name, pv_map in device.items():
-                ca_pv_map, pva_pv_map = helper.separate_by_protocol(pv_map)
+                ca_pv_map, pva_pv_map, tango_pv_map = helper.separate_by_protocol(pv_map)
                 _ioc_cls_map = DEVICE_IOC_CLASS_MAP.get(device_type, {})
                 _ca_ioc_cls = _ioc_cls_map.get("CA")
                 _pva_ioc_cls = _ioc_cls_map.get("PVA")
+                _tango_cls = _ioc_cls_map.get("TANGO")
                 if ca_pv_map and _ca_ioc_cls:
                     _ca_iocs.update(
                         helper.construct_ca_iocs(
-                            ca_pv_map, name, ioc_cls=_ca_ioc_cls, translator=translator
+                            ca_pv_map,
+                            name,
+                            ioc_cls=_ca_ioc_cls,
+                            translator=translator,
+                            timestep=timestep,
                         )
                     )
                 if pva_pv_map and _pva_ioc_cls:
@@ -82,20 +105,53 @@ def _construct_iocs() -> None:
                             translator=translator,
                         )
                     )
-            iocs_managers.append(helper._create_ioc_manager(_ca_iocs, _pva_iocs))
+                if tango_pv_map and _tango_cls:
+                    _devices = tango_helper.construct_tango_devices(
+                        tango_pv_map,
+                        name,
+                        device_type,
+                        device_cls=_tango_cls,
+                        translator=translator,
+                        timestep=timestep,
+                    )
+                    _tango_devices.update(_devices)
+                    _tango_classes.setdefault(_tango_cls, []).extend(_devices.keys())
+            iocs_managers.append(
+                helper._create_ioc_manager(_ca_iocs, _pva_iocs, _tango_devices, _tango_classes)
+            )
     return iocs_managers
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Run the simulated IOCs.")
+    parser.add_argument(
+        "--timestep",
+        type=float,
+        default=DEFAULT_TIMESTEP,
+        help="Interval, in seconds, on which simulated PVs are advanced.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    ioc_managers = _construct_iocs()
+    args = parse_arguments()
+    ioc_managers = _construct_iocs(timestep=args.timestep)
     ca_iocs = {}
     pva_iocs = {}
+    tango_devices = {}
+    tango_classes = {}
     for manager in ioc_managers:
         ca_iocs.update(manager.ca_iocs)
         pva_iocs.update(manager.pva_iocs)
+        tango_devices.update(manager.tango_devices)
+        for device_cls, names in manager.tango_classes.items():
+            known = tango_classes.setdefault(device_cls, [])
+            known.extend(n for n in names if n not in known)
     _stop_event = threading.Event()
+    _tango_ready = threading.Event()
     _pva_thread = None
     _ca_thread = None
+    _tango_thread = None
     if ca_iocs:
         _ca_thread = threading.Thread(target=run_ca_ioc, args=(ca_iocs,), daemon=True)
         _ca_thread.start()
@@ -104,13 +160,34 @@ if __name__ == "__main__":
             target=run_pva_ioc, args=(pva_iocs, _stop_event), daemon=True
         )
         _pva_thread.start()
+    if tango_devices:
+        tango_helper.report_when_ready(_tango_ready, tango_devices)
+        _tango_thread = threading.Thread(
+            target=run_tango_server,
+            args=(tango_classes, _stop_event, _tango_ready),
+            daemon=True,
+        )
+        _tango_thread.start()
     try:
-        while True:
+        while not (_tango_thread is not None and _stop_event.is_set()):
+            if _tango_thread is not None:
+                # TANGO installs its own SIGINT/SIGTERM handlers when its server
+                # starts, which would stop the TANGO server alone; take them
+                # back so that Ctrl-C stops everything in this process.
+                tango_helper.restore_signal_handlers()
             time.sleep(1)
+        print("TANGO server has stopped; exiting.")
     except KeyboardInterrupt:
         _stop_event.set()
         if _ca_thread:
             _ca_thread.join(timeout=2)
         if _pva_thread:
             _pva_thread.join(timeout=2)
-        sys.exit(0)
+    if _tango_thread:
+        _tango_thread.join(timeout=5)
+        # TANGO's C++ runtime does not shut down cleanly from a thread and can
+        # leave the interpreter waiting at exit. The servers have stopped, so
+        # leave without further cleanup.
+        sys.stdout.flush()
+        os._exit(0)
+    sys.exit(0)

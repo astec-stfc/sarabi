@@ -46,6 +46,8 @@ class Settings:
             raise FileNotFoundError(f"Could not find ioc base template.")
         if "pva_base_template.j2" not in templates:
             raise FileNotFoundError(f"Could not find pva base template.")
+        if "tango_base_template.j2" not in templates:
+            raise FileNotFoundError(f"Could not find tango base template.")
         if "main_template.j2" not in templates:
             raise FileNotFoundError(f"Could not find main.py template.")
         if "all_ioc_main_template.j2" not in templates:
@@ -59,6 +61,10 @@ class Settings:
     @property
     def pva_base_template_file(self) -> str:
         return os.path.join(self.templates_directory, "pva_base_template.j2")
+
+    @property
+    def tango_base_template_file(self) -> str:
+        return os.path.join(self.templates_directory, "tango_base_template.j2")
 
     @property
     def ca_main_template_file(self) -> str:

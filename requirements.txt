@@ -8,3 +8,5 @@ pvxslibs==1.4.1
 pydantic==2.11.7
 pydantic_core==2.33.2
 PyYAML==6.0.2
+pytango==10.3.1
+pytest==9.1.0

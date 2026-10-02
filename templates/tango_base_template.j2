@@ -1,0 +1,79 @@
+import os
+import sys
+
+import numpy as np
+from tango import AttrWriteType, DevEnum
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from core.device.base_server import TangoAttribute, TangoSimulatedDevice
+
+{# One TangoAttribute declaration per handle. TANGO attributes are created per
+   device from these when the server starts, so a device exposes only the
+   handles its definition names; `optional` documents the ones not every
+   device of this type defines. Rendered with trim_blocks and lstrip_blocks. #}
+{% macro declare(name, config, optional) %}
+{% set kind = config.dtype if config.dtype is defined else (config.type if config.type is defined else (config.control_type if config.control_type is defined else "scalar")) %}
+{% set kind = kind if kind in dtype_map else "scalar" %}
+{% set spec = dtype_map[kind] %}
+    {{ name }} = TangoAttribute(
+        name={{ attribute_names[name] | pyrepr }},
+        dtype={{ spec.dtype }},
+        initial={{ spec.initial }},
+        access=AttrWriteType.{{ "READ" if config.read_only is defined and config.read_only else "READ_WRITE" }},
+{% if config.units is defined and config.units %}
+        unit={{ config.units | string | pyrepr }},
+{% endif %}
+{% if kind == "state" and config.states is defined %}
+        enum_labels=[
+{% for key, _ in config.states | dictsort(by="value") %}
+            {{ key | string | pyrepr }},
+{% endfor %}
+        ],
+{% elif kind == "state" %}
+        enum_labels=["UNDEFINED"],
+{% endif %}
+{% if spec.max_dim_x is defined %}
+        max_dim_x={{ spec.max_dim_x }},
+{% endif %}
+        doc={{ (config.description if config.description is defined and config.description else "default description.") | string | pyrepr }},
+        optional={{ optional }},
+    )
+{% endmacro %}
+
+class {{ class_name }}(TangoSimulatedDevice):
+    """Simulated TANGO device for the {{ device_type }} type.
+
+    Devices are named ``VM/{{ device_type }}/<device name>``; each exposes the
+    handles below that its definition names, under the attribute names given.
+    Setpoint/readback pairs and update signals differ per device, so they are
+    registered with `configure` before the server starts and advanced by the
+    device in its own thread.
+    """
+
+{% for name, config in pv_map.items() %}
+{{ declare(name, config, False) }}
+{% endfor %}
+{% if unique_pv_map %}
+    # The following attributes may not exist for all devices of this type.
+{% for name, config in unique_pv_map.items() %}
+{{ declare(name, config, True) }}
+{% endfor %}
+{% endif %}
+{% if not pv_map and not unique_pv_map %}
+    pass
+
+{% endif %}
+
+if __name__ == "__main__":
+    # Serve every declared attribute on one device, for a quick look.
+    import threading
+
+    from core import tango_helper
+
+    device = tango_helper.tango_device_name("{{ device_type }}-example", "{{ device_type }}")
+    ready = threading.Event()
+    tango_helper.report_when_ready(
+        ready,
+        {device: {a.name: h for h, a in {{ class_name }}.declared_attributes().items()}},
+    )
+    tango_helper.run_tango_server({ {{ class_name }}: [device]}, ready_event=ready)

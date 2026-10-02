@@ -125,6 +125,8 @@ if __name__ == "__main__":
         class_name = module[1]
         if "PVA" in class_name:
             device_ioc_class_map.setdefault(device_type, {})["PVA"] = class_name
+        elif "Tango" in class_name:
+            device_ioc_class_map.setdefault(device_type, {})["TANGO"] = class_name
         else:
             device_ioc_class_map.setdefault(device_type, {})["CA"] = class_name
     with open(SETTINGS.all_ioc_main_template_file) as f:
