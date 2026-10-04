@@ -11,6 +11,7 @@ from core.translator import SchemaTranslator
 from core.settings import Settings
 from collections import Counter
 from core.yaml_loader import iter_yaml_files, is_schema_yaml, resolve_device_config
+from core.layout import write_allowed_devices
 
 # Define dtype_map
 CA_DTYPE_MAP = {
@@ -48,6 +49,7 @@ PVA_DTYPE_MAP = {
 
 SETTINGS: Settings = None
 TRANSLATOR: SchemaTranslator = None
+ALLOWED_DEVICES: set = None
 
 
 def _find_yaml_files(device_path: str) -> List[str]:
@@ -97,15 +99,10 @@ def parse_arguments():
 
 def get_pv_maps(device_path) -> list[PVInfo]:
     pv_maps = []
-    for yaml_file_path in _find_yaml_files(device_path):
-        try:
-            resolved = resolve_device_config(yaml_file_path, TRANSLATOR)
-        except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
-            warnings.warn(f"Skipping '{yaml_file_path}': {exc}")
-            continue
+    for resolved in _get_resolved_devices(device_path):
         pv_data = resolved.pv_map
         if pv_data:
-            rel_filename = os.path.relpath(yaml_file_path, device_path)
+            rel_filename = os.path.relpath(resolved.file_path, device_path)
             pv_map = PVInfo(filename=rel_filename, pv_map=pv_data)
             pv_maps.append(pv_map)
     return pv_maps
@@ -115,9 +112,13 @@ def _get_resolved_devices(device_path: str):
     resolved = []
     for yaml_file_path in _find_yaml_files(device_path):
         try:
-            resolved.append(resolve_device_config(yaml_file_path, TRANSLATOR))
+            device = resolve_device_config(yaml_file_path, TRANSLATOR)
         except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
             warnings.warn(f"Skipping '{yaml_file_path}': {exc}")
+            continue
+        if ALLOWED_DEVICES is not None and device.device_name not in ALLOWED_DEVICES:
+            continue
+        resolved.append(device)
     return resolved
 
 
@@ -270,6 +271,16 @@ if __name__ == "__main__":
         pva_base_template = Template(f.read())
 
     TRANSLATOR = SchemaTranslator(SETTINGS.schema_file)
+
+    ALLOWED_DEVICES = SETTINGS.allowed_devices
+    if ALLOWED_DEVICES is None:
+        print("No layout selected; rendering every device.")
+    else:
+        print(
+            f"Layout {SETTINGS.layout}: rendering {len(ALLOWED_DEVICES)} devices."
+        )
+    write_allowed_devices(SETTINGS.output_directory, ALLOWED_DEVICES)
+
     # Iterate over device_type folders
     for device_type, device_path in _find_device_folders(SETTINGS.devices_directory):
         if (

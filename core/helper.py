@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple, Any, Type
+from typing import List, Dict, Set, Tuple, Any, Type
 import os
 import warnings
 from caproto.server import PVGroup, template_arg_parser
@@ -235,8 +235,28 @@ def construct_pva_iocs(
 
 
 def _get_device_info(
-    yaml_dir: str, translator: SchemaTranslator
+    yaml_dir: str,
+    translator: SchemaTranslator,
+    allowed_devices: Set[str] = None,
 ) -> List[Dict[str, Dict]]:
+    """
+    Resolve every device in the directory into a ``{name: pv_map}`` entry.
+
+    Parameters
+    ----------
+    yaml_dir: str
+        Directory containing YAML files describing elements
+    translator: core.translator.SchemaTranslator
+        The schema translator class
+    allowed_devices: Set[str], optional
+        Restricts the result to devices on the selected layout (`core.layout`).
+        If ``None``, do not filter for any PVs.
+
+    Returns
+    -------
+    list[dict[str, dict]]
+        A filtered list of dictionaries describing elements
+    """
     device_info = []
     for yaml_file_path in iter_yaml_files(yaml_dir, recursive=False):
         if is_schema_yaml(yaml_file_path):
@@ -245,6 +265,8 @@ def _get_device_info(
             resolved = resolve_device_config(yaml_file_path, translator)
         except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
             warnings.warn(f"Skipping '{yaml_file_path}': {exc}")
+            continue
+        if allowed_devices is not None and resolved.device_name not in allowed_devices:
             continue
         if resolved.pv_map:
             # only add valid controls information

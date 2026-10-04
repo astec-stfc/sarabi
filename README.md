@@ -29,6 +29,24 @@ Change the `settings.yaml` to point to the relevant directories:
 - `devices_directory`: The location of your device yaml files.
 - `ignore_device_types`: A list of the device folders to be ignored in generation.
 
+### Selecting a layout
+
+A facility may define more than one beam path over the same device tree,
+and instead of generating the entire machine a layout can be passed through
+so only relevant PVs are generated.
+
+- `layout`: The layout to render. Omit it, leave it empty, or
+  set the `LAYOUT` environment variable instead. Unset means every device is
+  rendered.
+- `layouts_file`, `sections_file`: Optional explicit paths. By default
+  `layouts.yaml` and `sections.yaml` are looked for in `devices_directory`
+  and then in its parent.
+
+An unknown layout name, or a layout naming a section the lattice does not
+define, stops the render and lists what is available.
+The resolved device list is written to `layout_devices.txt` in the output
+directory.
+
 ## Rendering
 
 Once you're settings are configured for your project, run the following command to render the ioc source files:

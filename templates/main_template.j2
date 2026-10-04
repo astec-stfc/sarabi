@@ -10,6 +10,7 @@ from {{module[1]}} import {{ module[1]}}
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "..",))
 from core.translator import SchemaTranslator
 from core import helper as helper
+from core.layout import load_allowed_devices
 from core.device.base_server import DEFAULT_TIMESTEP
 from caproto.server import run
 from p4p.server import Server
@@ -26,6 +27,7 @@ os.environ["EPICS_CA_AUTO_ADDR_LIST"] = os.getenv("EPICS_CA_AUTO_ADDR_LIST", "NO
 yaml_dir = r"{{yaml_root}}"
 translator_spec = r"{{translator_file}}"
 translator = SchemaTranslator(translator_spec)
+allowed_devices = load_allowed_devices(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ca_iocs = {}
 pva_iocs = {}
 
@@ -43,7 +45,7 @@ def _construct_iocs(timestep: float = DEFAULT_TIMESTEP) -> None:
     """Build every IOC, advancing their simulated PVs on `timestep` seconds."""
     _ca_iocs = {}
     _pva_iocs = {}
-    for device in helper._get_device_info(yaml_dir, translator=translator):
+    for device in helper._get_device_info(yaml_dir, translator=translator, allowed_devices=allowed_devices):
         for name, pv_map in device.items():
             ca_pv_map, pva_pv_map = helper.separate_by_protocol(pv_map)
     {% for module in imports %}
