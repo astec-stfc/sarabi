@@ -56,3 +56,50 @@ class SchemaTranslator:
             "protocol",
             "protocol",
         )
+
+    # The following describe simulated behaviour, and are optional: schemas
+    # written before they existed fall back to the default wording.
+
+    @property
+    def readback_word(self) -> str:
+        return self.schema.get(
+            "readback",
+            "readback",
+        )
+
+    @property
+    def setpoint_word(self) -> str:
+        return self.schema.get(
+            "setpoint",
+            "setpoint",
+        )
+
+    @property
+    def dynamics_word(self) -> str:
+        return self.schema.get(
+            "dynamics",
+            "dynamics",
+        )
+
+    @property
+    def update_word(self) -> str:
+        return self.schema.get(
+            "update",
+            "update",
+        )
+
+    @property
+    def dynamics_model_key(self) -> str:
+        """Key naming the response model within a `dynamics` definition."""
+        return self.schema.get(
+            "dynamics_model",
+            "model",
+        )
+
+    @property
+    def update_function_key(self) -> str:
+        """Key naming the signal within an `update` definition."""
+        return self.schema.get(
+            "update_function",
+            "function",
+        )

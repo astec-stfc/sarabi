@@ -3,12 +3,15 @@ import os
 from typing import List
 import format as formatter
 import yaml
+import warnings
 from jinja2 import Template
 import numpy as np
 from core.pv_info import PVInfo
 from core.translator import SchemaTranslator
 from core.settings import Settings
 from collections import Counter
+from core.yaml_loader import iter_yaml_files, is_schema_yaml, resolve_device_config
+from core.layout import write_allowed_devices
 
 # Define dtype_map
 CA_DTYPE_MAP = {
@@ -46,15 +49,16 @@ PVA_DTYPE_MAP = {
 
 SETTINGS: Settings = None
 TRANSLATOR: SchemaTranslator = None
+ALLOWED_DEVICES: set = None
 
 
 def _find_yaml_files(device_path: str) -> List[str]:
     """Return a list of full paths to .yaml files under device_path (recursive)."""
     yaml_files = []
-    for root, _, files in os.walk(device_path):
-        for fn in files:
-            if fn.endswith(".yaml") or fn.endswith(".yml"):
-                yaml_files.append(os.path.join(root, fn))
+    for yaml_file in iter_yaml_files(device_path, recursive=True):
+        if is_schema_yaml(yaml_file):
+            continue
+        yaml_files.append(yaml_file)
     return yaml_files
 
 
@@ -76,7 +80,7 @@ def _find_device_folders(device_root: str) -> List[str]:
 def _load_settings(settings_yaml: str) -> Settings:
     if not os.path.exists(settings_yaml):
         raise FileNotFoundError(f"Could not find {settings_yaml}")
-    with open(settings_yaml, "r") as f:
+    with open(settings_yaml, "r", encoding="utf-8") as f:
         _settings = yaml.load(f, Loader=yaml.SafeLoader)
         settings = Settings(**_settings)
     return settings
@@ -95,87 +99,102 @@ def parse_arguments():
 
 def get_pv_maps(device_path) -> list[PVInfo]:
     pv_maps = []
-    for yaml_file_path in _find_yaml_files(device_path):
-        with open(yaml_file_path) as yaml_content:
-            data = yaml.safe_load(yaml_content)
-        pv_data = data.get(
-            TRANSLATOR.controls_information_word,
-            {},
-        ).get(
-            TRANSLATOR.signal_information_word,
-            {},
-        )
+    for resolved in _get_resolved_devices(device_path):
+        pv_data = resolved.pv_map
         if pv_data:
-            rel_filename = os.path.relpath(yaml_file_path, device_path)
+            rel_filename = os.path.relpath(resolved.file_path, device_path)
             pv_map = PVInfo(filename=rel_filename, pv_map=pv_data)
             pv_maps.append(pv_map)
     return pv_maps
 
 
-def get_common_pvs(device_path) -> PVInfo:
-    pv_maps = get_pv_maps(device_path)
+def _get_resolved_devices(device_path: str):
+    resolved = []
+    for yaml_file_path in _find_yaml_files(device_path):
+        try:
+            device = resolve_device_config(yaml_file_path, TRANSLATOR)
+        except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
+            warnings.warn(f"Skipping '{yaml_file_path}': {exc}")
+            continue
+        if ALLOWED_DEVICES is not None and device.device_name not in ALLOWED_DEVICES:
+            continue
+        resolved.append(device)
+    return resolved
+
+
+def _analyze_pvs(device_path: str) -> tuple[PVInfo | None, PVInfo]:
+    resolved_devices = _get_resolved_devices(device_path)
+    pv_maps = [
+        PVInfo(filename=device.file_path, pv_map=device.pv_map)
+        for device in resolved_devices
+        if device.pv_map
+    ]
     if not pv_maps:
-        return None
-    # Find common keys (present in all dictionaries)
-    all_handles = []
-    for entry in pv_maps:
-        all_handles.append(set(entry.handles))
-    if all_handles:
-        if set.intersection(*all_handles):
-            common_keys = set.intersection(*all_handles)
-        else:
-            # If no strict intersection, pick the most common handles across files.
-            flat_handles = []
-            for s in all_handles:
-                flat_handles.extend(s)
-            counts = Counter(flat_handles)
-            if counts:
-                max_count = max(counts.values())
-                # Only consider items seen more than once as "common"
-                if max_count > 1:
-                    common_keys = {k for k, v in counts.items() if v == max_count}
-                else:
-                    return None
-            else:
-                return None
+        return None, PVInfo(filename="", pv_map={})
+
+    shared_schema_paths = {
+        device.schema_path for device in resolved_devices if device.uses_schema
+    }
+    all_use_schema = bool(resolved_devices) and all(
+        device.uses_schema for device in resolved_devices
+    )
+
+    if all_use_schema and len(shared_schema_paths) == 1:
+        schema_handles = resolved_devices[0].schema_handles or set()
+        if schema_handles:
+            representative = resolved_devices[0].pv_map
+            common_map = {
+                handle: representative[handle]
+                for handle in sorted(schema_handles)
+                if handle in representative
+            }
+            unique_map = {}
+            common_handle_set = set(common_map.keys())
+            for device in resolved_devices:
+                for handle, config in device.pv_map.items():
+                    if handle not in common_handle_set:
+                        unique_map[handle] = config
+            return PVInfo(filename="", pv_map=common_map), PVInfo(
+                filename="", pv_map=unique_map
+            )
+
+    all_handles = [set(entry.handles) for entry in pv_maps]
+    if all_handles and set.intersection(*all_handles):
+        common_keys = set.intersection(*all_handles)
     else:
-        return None
-    if len(common_keys) == 0:
-        raise ValueError("Could not find any common keys.")
-    # Identify common PVs
-    common_pvs = {}
-    for map in pv_maps:
-        for key in list(map.handles):
-            if key in common_keys:
-                common_pvs[key] = map.pv_map[key]
-    common_pv_info = PVInfo(filename="", pv_map=common_pvs)
+        flat_handles = []
+        for handle_set in all_handles:
+            flat_handles.extend(handle_set)
+        counts = Counter(flat_handles)
+        if not counts:
+            return None, PVInfo(filename="", pv_map={})
+        max_count = max(counts.values())
+        if max_count <= 1:
+            return None, PVInfo(filename="", pv_map={})
+        common_keys = {key for key, value in counts.items() if value == max_count}
+
+    common_map = {}
+    for pv_info in pv_maps:
+        for handle in pv_info.handles:
+            if handle in common_keys:
+                common_map[handle] = pv_info.pv_map[handle]
+
+    unique_map = {}
+    for pv_info in pv_maps:
+        for handle in pv_info.handles:
+            if handle not in common_keys:
+                unique_map[handle] = pv_info.pv_map[handle]
+
+    return PVInfo(filename="", pv_map=common_map), PVInfo(filename="", pv_map=unique_map)
+
+
+def get_common_pvs(device_path) -> PVInfo:
+    common_pv_info, _ = _analyze_pvs(device_path)
     return common_pv_info
 
 
 def get_unique_pvs(device_path) -> PVInfo:
-    pv_maps = get_pv_maps(device_path)
-    if not pv_maps:
-        return {}
-
-    # Find common keys (present in all dictionaries)
-    common_keys = get_common_pvs(device_path=device_path)
-    if common_keys is None:
-        common_keys = set()
-    unique_keys = set()
-    for entry in pv_maps:
-        for handle in entry.handles:
-            if not handle in common_keys.handles:
-                unique_keys.add(handle)
-    if len(unique_keys) == 0:
-        return PVInfo(filename="", pv_map={})
-    # Identify unique PVs
-    unique_pvs = {}
-    unique_pv_info = []
-    for map in pv_maps:
-        for key in list(map.handles):
-            if key in unique_keys:
-                unique_pvs[key] = map.pv_map[key]
-    unique_pv_info = PVInfo(filename="", pv_map=unique_pvs)
+    _, unique_pv_info = _analyze_pvs(device_path)
     return unique_pv_info
 
 
@@ -246,12 +265,22 @@ if __name__ == "__main__":
     # Ensure output directory exists
     os.makedirs(SETTINGS.output_directory, exist_ok=True)
 
-    with open(SETTINGS.ca_base_template_file) as f:
+    with open(SETTINGS.ca_base_template_file, encoding="utf-8") as f:
         ca_base_template = Template(f.read())
-    with open(SETTINGS.pva_base_template_file) as f:
+    with open(SETTINGS.pva_base_template_file, encoding="utf-8") as f:
         pva_base_template = Template(f.read())
 
     TRANSLATOR = SchemaTranslator(SETTINGS.schema_file)
+
+    ALLOWED_DEVICES = SETTINGS.allowed_devices
+    if ALLOWED_DEVICES is None:
+        print("No layout selected; rendering every device.")
+    else:
+        print(
+            f"Layout {SETTINGS.layout}: rendering {len(ALLOWED_DEVICES)} devices."
+        )
+    write_allowed_devices(SETTINGS.output_directory, ALLOWED_DEVICES)
+
     # Iterate over device_type folders
     for device_type, device_path in _find_device_folders(SETTINGS.devices_directory):
         if (
@@ -259,9 +288,8 @@ if __name__ == "__main__":
             or device_type in SETTINGS.ignore_device_types
         ):
             continue
-        # Find common and unique PVs
-        common_pvs = get_common_pvs(device_path)
-        unique_pvs = get_unique_pvs(device_path)
+        # Find common and unique PVs in one pass per device type.
+        common_pvs, unique_pvs = _analyze_pvs(device_path)
         if common_pvs is None:
             continue
         # Render base class for with unique PVs as optional

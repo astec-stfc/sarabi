@@ -12,7 +12,7 @@ SETTINGS = None
 def _load_settings(settings_yaml: str) -> Settings:
     if not os.path.exists(settings_yaml):
         raise FileNotFoundError(f"Could not find {settings_yaml}")
-    with open(settings_yaml, "r") as f:
+    with open(settings_yaml, "r", encoding="utf-8") as f:
         _settings = yaml.load(f, Loader=yaml.SafeLoader)
         settings = Settings(**_settings)
     return settings
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # Load settings from the specified file
     SETTINGS = _load_settings(args.settings)
     # Load template
-    with open(SETTINGS.ca_main_template_file) as f:
+    with open(SETTINGS.ca_main_template_file, encoding="utf-8") as f:
         template = Template(f.read())
 
     # Group files by device_type
@@ -127,7 +127,7 @@ if __name__ == "__main__":
             device_ioc_class_map.setdefault(device_type, {})["PVA"] = class_name
         else:
             device_ioc_class_map.setdefault(device_type, {})["CA"] = class_name
-    with open(SETTINGS.all_ioc_main_template_file) as f:
+    with open(SETTINGS.all_ioc_main_template_file, encoding="utf-8") as f:
         run_all_template = Template(f.read())
     rendered_all = run_all_template.render(
         device_ioc_class_map=device_ioc_class_map,

@@ -1,7 +1,9 @@
-from typing import List
+from typing import List, Optional, Set
 import os
 import json
 import warnings
+
+from .layout import resolve_allowed_devices
 
 
 class NoDeviceDirectories(Exception):
@@ -21,6 +23,9 @@ class Settings:
     schema_file: str
     devices_directory: str
     ignore_device_types: List[str]
+    layout: Optional[str]
+    layouts_file: Optional[str]
+    sections_file: Optional[str]
 
     def __init__(
         self,
@@ -29,12 +34,30 @@ class Settings:
         schema_file: str,
         devices_directory: str,
         ignore_device_types: List[str],
+        layout: Optional[str] = None,
+        layouts_file: Optional[str] = None,
+        sections_file: Optional[str] = None,
     ):
         self.templates_directory = self._validate_templates(templates_directory)
         self.output_directory = output_directory
         self.schema_file = self._validate_schema(schema_file)
         self.devices_directory = self._validate_devices(devices_directory)
         self.ignore_device_types = ignore_device_types
+        self.layout = (layout or os.getenv("LAYOUT", "")).strip() or None
+        self.layouts_file = layouts_file
+        self.sections_file = sections_file
+
+    @property
+    def allowed_devices(self) -> Optional[Set[str]]:
+        """
+        Names to render, or ``None`` to render every device.
+        """
+        return resolve_allowed_devices(
+            self.devices_directory,
+            self.layout,
+            layouts_file=self.layouts_file,
+            sections_file=self.sections_file,
+        )
 
     def _validate_templates(self, templates_directory) -> str:
         if not os.path.exists(templates_directory):
