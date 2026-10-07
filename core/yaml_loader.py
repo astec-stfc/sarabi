@@ -89,7 +89,7 @@ def resolve_device_config(
     schema_path: Optional[str] = None
 
     if uses_schema:
-        identifier_pattern = controls.get("identifier_pattern") or device_name
+        identifier_pattern = controls.get("identifier_pattern", device_name)
         if not identifier_pattern:
             raise ValueError(
                 f"Missing controls.identifier_pattern or name in '{yaml_file_path}' while controls.schema is set."
