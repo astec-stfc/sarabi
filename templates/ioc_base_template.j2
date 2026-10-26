@@ -24,7 +24,8 @@ class {{class_name}}(CASimulatedPVGroup):
                 {% endfor %}
             ],
             {% endif %}
-            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
+            {# caproto's string, enum and bool channels take no units #}
+            {% if config.units is defined and config.type not in ("string", "state", "binary") %}units="{{ config.units }}",{% endif %}
             doc="{{ config.description if config.description is defined else 'default description.' }}",
         )
     {% endfor %}
@@ -42,7 +43,7 @@ class {{class_name}}(CASimulatedPVGroup):
                 {% endfor %}
             ],
             {% endif %}
-            {% if config.units is defined %}units="{{ config.units }}",{% endif %}
+            {% if config.units is defined and config.type not in ("string", "state", "binary") %}units="{{ config.units }}",{% endif %}
             doc="{{ config.description if config.description is defined else 'default description.' }}",
         )
     {% endfor %}
